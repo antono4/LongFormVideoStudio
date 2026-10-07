@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Long-Form Video Generator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <div class="aurora"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">◈</span>
+      <div>
+        <h1>Long-Form Video Studio</h1>
+        <p>Turn a topic into a narrated, subtitled video longer than 30 seconds.</p>
+      </div>
+    </div>
+    <div class="status-chip {{ 'ok' if ffmpeg_ok else 'bad' }}">
+      <span class="dot"></span> {{ 'ffmpeg ready' if ffmpeg_ok else 'ffmpeg missing' }}
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="panel form-panel">
+      <form id="gen-form">
+        <label class="field">
+          <span>Video topic</span>
+          <textarea id="topic" rows="2" placeholder="e.g. The hidden life of deep-sea creatures" required></textarea>
+        </label>
+
+        <label class="field">
+          <span>Duration <b id="dur-value">60</b> seconds</span>
+          <input type="range" id="duration" min="{{ min_seconds }}" max="{{ max_seconds }}" step="5" value="60" />
+          <div class="range-scale"><span>{{ min_seconds }}s</span><span>{{ max_seconds }}s</span></div>
+        </label>
+
+        <div class="grid-2">
+          <label class="field">
+            <span>Voice</span>
+            <select id="voice">
+              {% for v in voices %}
+              <option value="{{ v.key }}" {{ 'selected' if v.key == default_voice else '' }} {{ 'disabled' if not v.ready else '' }}>
+                {{ v.label }}{{ '' if v.ready else ' (not installed)' }}
+              </option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="field">
+            <span>Visual style</span>
+            <select id="style">
+              <option value="cinematic">Cinematic</option>
+              <option value="photorealistic">Photorealistic</option>
+              <option value="anime">Anime</option>
+              <option value="3d render">3D render</option>
+              <option value="watercolor">Watercolor</option>
+              <option value="documentary">Documentary</option>
+            </select>
+          </label>
+        </div>
+
+        <label class="field">
+          <span>Tone</span>
+          <input type="text" id="tone" value="engaging and informative" />
+        </label>
+
+        <button type="submit" id="submit-btn" class="primary">
+          <span class="btn-label">Generate video</span>
+        </button>
+        <p class="hint">Script, voiceover and images are generated with free AI services. No API key needed.</p>
+      </form>
+    </section>
+
+    <section class="panel result-panel">
+      <div id="placeholder" class="placeholder">
+        <div class="placeholder-art">▶</div>
+        <p>Your generated video will appear here.</p>
+      </div>
+
+      <div id="progress-box" class="progress-box hidden">
+        <div class="spinner"></div>
+        <h3 id="stage">Starting...</h3>
+        <div class="bar"><div id="bar-fill"></div></div>
+        <p id="pct">0%</p>
+      </div>
+
+      <div id="error-box" class="error-box hidden">
+        <h3>Something went wrong</h3>
+        <p id="error-text"></p>
+      </div>
+
+      <div id="video-box" class="video-box hidden">
+        <h3 id="video-title"></h3>
+        <video id="video" controls playsinline></video>
+        <div class="video-meta" id="video-meta"></div>
+        <div class="actions">
+          <a id="download-btn" class="primary" download>Download MP4</a>
+          <button id="again-btn" class="ghost">New video</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <section class="history">
+    <h2>Recent videos</h2>
+    <div id="history-list" class="history-list"></div>
+  </section>
+
+  <footer class="footer">
+    <p>Runs fully on your machine: Piper TTS for narration, ffmpeg for rendering, free AI endpoints for text and images.</p>
+  </footer>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

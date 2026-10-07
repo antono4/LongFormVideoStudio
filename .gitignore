@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Large downloaded voice models (re-fetched by scripts/download_models.sh)
+models/*.onnx
+
+# Generated artifacts
+output/*.mp4
+tmp/
+server.log
