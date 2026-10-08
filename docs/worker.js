@@ -1,17 +1,10 @@
-// Module worker: runs eSpeak-NG (WASM) and fetches scene images off the main
-// thread so the UI stays responsive while a video is built.
-
-import ESpeakNG from "./vendor/espeak-ng.js";
-
-const VENDOR = new URL("./vendor/", import.meta.url).href;
+// Module worker: fetches scene images off the main thread so the UI stays
+// responsive while a video is built.
 
 self.onmessage = async (event) => {
   const { id, type } = event.data;
   try {
-    if (type === "tts") {
-      const wav = await synthesize(event.data);
-      self.postMessage({ id, ok: true, wav }, [wav]);
-    } else if (type === "image") {
+    if (type === "image") {
       const image = await fetchImage(event.data.url);
       self.postMessage({ id, ok: true, image }, [image]);
     } else {
@@ -21,17 +14,6 @@ self.onmessage = async (event) => {
     self.postMessage({ id, ok: false, error: String((err && err.message) || err) });
   }
 };
-
-async function synthesize({ text, voice, rate, pitch }) {
-  const args = ["-v", voice || "en-us", "-s", String(rate || 165), "-p", String(pitch || 50)];
-  args.push("-w", "out.wav", text);
-  const espeak = await ESpeakNG({
-    arguments: args,
-    locateFile: (path) => VENDOR + path,
-  });
-  const data = espeak.FS.readFile("out.wav");
-  return data.slice().buffer;
-}
 
 async function fetchImage(url) {
   const controller = new AbortController();

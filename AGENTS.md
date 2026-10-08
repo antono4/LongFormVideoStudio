@@ -17,8 +17,20 @@ seconds. It uses free AI services and fully offline TTS/rendering.
 - `models/` — Piper `.onnx` + `.onnx.json` (gitignored, re-downloadable).
 - `output/`, `tmp/` — generated artifacts (gitignored).
 - `docs/` — the GitHub Pages build: a 100% client-side version of the same UI
-  (no backend). `studio.js` runs the pipeline in the browser, `worker.js` runs
-  eSpeak-NG WASM and image fetches, `vendor/` holds the WASM bundle.
+  (no backend). `studio.js` runs the pipeline in the browser, `worker.js` fetches
+  scene images off-thread, `tts-worker.js` runs eSpeak-NG WASM one-shot per
+  utterance, `vendor/` holds the WASM bundle.
+
+## Client memory limits (why Chrome used to crash)
+
+- eSpeak-NG's wasm instance cannot be reused: `main` only writes `out.wav` on
+  the first call, and `noExitRuntime` keeps the whole ~18 MB runtime resident.
+  So `tts-worker.js` is a throwaway worker: create → synthesize → terminate.
+  Never cache an eSpeak instance across utterances; memory then stays flat
+  (~10 MB) no matter how long the video.
+- `docs/studio.js` keeps history metadata in the `videos` store and blobs in a
+  separate `blobs` store (`lfvs` DB v2), capped at `HISTORY_LIMIT`. Blobs are
+  read on demand only when a history card is clicked — never bulk-loaded.
 
 ## GitHub Pages
 

@@ -66,10 +66,27 @@ function workerCall(payload) {
   });
 }
 
-const synthWav = (text, voice, rate, pitch) =>
-  workerCall({ type: "tts", text, voice, rate, pitch });
-
 const fetchImage = (url) => workerCall({ type: "image", url });
+
+// eSpeak cannot reuse an instance, so each utterance runs in a throwaway worker
+// that is terminated afterwards — otherwise memory grows with every scene and
+// the tab crashes on longer videos.
+function synthWav(text, voice, rate, pitch) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker("./tts-worker.js", { type: "module" });
+    const done = (fn, value) => {
+      worker.terminate();
+      fn(value);
+    };
+    worker.onmessage = (event) => {
+      const { ok, wav, error } = event.data;
+      if (ok) done(resolve, wav);
+      else done(reject, new Error(error));
+    };
+    worker.onerror = (event) => done(reject, new Error(event.message || "tts worker error"));
+    worker.postMessage({ text, voice, rate, pitch });
+  });
+}
 
 // --- Voice catalog ---------------------------------------------------------
 
@@ -856,40 +873,78 @@ async function buildVideo(topic, targetSeconds, voiceKey, tone, style, language,
 
 const DB_NAME = "lfvs";
 const DB_STORE = "videos";
+const DB_BLOBS = "blobs";
+const HISTORY_LIMIT = 6;
 
 function openDB() {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = () => {
+    const req = indexedDB.open(DB_NAME, 2);
+    req.onupgradeneeded = (event) => {
       const db = req.result;
       if (!db.objectStoreNames.contains(DB_STORE)) {
         db.createObjectStore(DB_STORE, { keyPath: "id" });
       }
+      if (!db.objectStoreNames.contains(DB_BLOBS)) {
+        db.createObjectStore(DB_BLOBS);
+      }
+      // v1 kept the blob inside the metadata record; drop those heavy rows.
+      if (event.oldVersion < 2) req.transaction.objectStore(DB_STORE).clear();
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
 }
 
+function dbWrite(db, store, value, key) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(store, "readwrite");
+    const req = key === undefined ? tx.objectStore(store).put(value) : tx.objectStore(store).put(value, key);
+    req.onerror = () => reject(req.error);
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+function dbDelete(db, store, key) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(store, "readwrite");
+    tx.objectStore(store).delete(key);
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+// Only metadata is kept in memory; the blob lives in its own store and is read
+// on demand, so a long history no longer pins hundreds of MB in the tab.
 async function historyPut(entry) {
+  const { blob, ...meta } = entry;
   try {
     const db = await openDB();
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction(DB_STORE, "readwrite");
-      tx.objectStore(DB_STORE).put(entry);
-      tx.oncomplete = resolve;
-      tx.onerror = () => reject(tx.error);
-    });
+    await dbWrite(db, DB_BLOBS, blob, meta.id);
+    await dbWrite(db, DB_STORE, meta);
+    await historyTrim(db);
     db.close();
   } catch (err) { /* storage unavailable — history is best-effort */ }
+}
+
+async function historyTrim(db) {
+  const all = await new Promise((resolve, reject) => {
+    const req = db.transaction(DB_STORE, "readonly").objectStore(DB_STORE).getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error);
+  });
+  all.sort((a, b) => b.created - a.created);
+  for (const stale of all.slice(HISTORY_LIMIT)) {
+    await dbDelete(db, DB_STORE, stale.id);
+    await dbDelete(db, DB_BLOBS, stale.id);
+  }
 }
 
 async function historyAll() {
   try {
     const db = await openDB();
     const rows = await new Promise((resolve, reject) => {
-      const tx = db.transaction(DB_STORE, "readonly");
-      const req = tx.objectStore(DB_STORE).getAll();
+      const req = db.transaction(DB_STORE, "readonly").objectStore(DB_STORE).getAll();
       req.onsuccess = () => resolve(req.result || []);
       req.onerror = () => reject(req.error);
     });
@@ -897,6 +952,21 @@ async function historyAll() {
     return rows.sort((a, b) => b.created - a.created);
   } catch (err) {
     return [];
+  }
+}
+
+async function historyBlob(id) {
+  try {
+    const db = await openDB();
+    const blob = await new Promise((resolve, reject) => {
+      const req = db.transaction(DB_BLOBS, "readonly").objectStore(DB_BLOBS).get(id);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    db.close();
+    return blob || null;
+  } catch (err) {
+    return null;
   }
 }
 
@@ -954,9 +1024,14 @@ async function renderHistory() {
       <h4>${(row.title || row.topic).slice(0, 60)}</h4>
       <p>${Math.round(row.duration)}s • ${row.scenes} scenes • ${(row.size / 1048576).toFixed(1)} MB</p>
       <span class="badge done">done</span>`;
-    card.addEventListener("click", () => {
+    card.addEventListener("click", async () => {
+      const blob = await historyBlob(row.id);
+      if (!blob) {
+        renderHistory();
+        return;
+      }
       showVideo(
-        { blob: row.blob, mime: row.mime, duration: row.duration, segments: new Array(row.scenes), script: { title: row.title, source: row.source } },
+        { blob, mime: row.mime, duration: row.duration, segments: new Array(row.scenes), script: { title: row.title, source: row.source } },
         row.topic,
         true,
       );
