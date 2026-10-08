@@ -16,6 +16,24 @@ seconds. It uses free AI services and fully offline TTS/rendering.
 - `scripts/download_models.sh` — fetches Piper voice models into `models/`.
 - `models/` — Piper `.onnx` + `.onnx.json` (gitignored, re-downloadable).
 - `output/`, `tmp/` — generated artifacts (gitignored).
+- `docs/` — the GitHub Pages build: a 100% client-side version of the same UI
+  (no backend). `studio.js` runs the pipeline in the browser, `worker.js` runs
+  eSpeak-NG WASM and image fetches, `vendor/` holds the WASM bundle.
+
+## GitHub Pages
+
+- Published at https://antono4.github.io/LongFormVideoStudio/ .
+- Pages serves the repo root of `main`, so the root `index.html` redirects to
+  `docs/`. The `/docs` path 404s if Pages is not pointed at `/docs`; the
+  redirect keeps the app reachable either way.
+- `.nojekyll` disables Jekyll so the wasm and other assets are served verbatim.
+- Keep all asset URLs relative (`./worker.js`, `./vendor/`) so the app works
+  from the `/LongFormVideoStudio/docs/` subpath.
+- The client-side UI mirrors the server UI, including a "Recent videos" section
+  backed by IndexedDB (browsers have no server-side history).
+- The root `main` branch also contains the Flask app and its assets, so a Pages
+  build publishes the whole tree. Large files make the build slow; give it a
+  couple of minutes after a push.
 
 ## Conventions
 
