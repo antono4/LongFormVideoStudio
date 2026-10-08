@@ -34,9 +34,14 @@ const $ = (id) => document.getElementById(id);
 
 // --- Worker bridge ---------------------------------------------------------
 
+// Bump when a worker's code changes so cached copies are not reused by an
+// already-open tab (GitHub Pages caches assets for a while).
+const WORKER_VERSION = "4";
+const workerUrl = (name) => `./${name}?v=${WORKER_VERSION}`;
+
 function getWorker() {
   if (!state.worker) {
-    state.worker = new Worker("./worker.js", { type: "module" });
+    state.worker = new Worker(workerUrl("worker.js"), { type: "module" });
     state.worker.onmessage = (event) => {
       const { id, ok, error } = event.data;
       const entry = state.pending.get(id);
@@ -73,7 +78,7 @@ const fetchImage = (url) => workerCall({ type: "image", url });
 // the tab crashes on longer videos.
 function synthWav(text, voice, rate, pitch) {
   return new Promise((resolve, reject) => {
-    const worker = new Worker("./tts-worker.js", { type: "module" });
+    const worker = new Worker(workerUrl("tts-worker.js"), { type: "module" });
     const done = (fn, value) => {
       worker.terminate();
       fn(value);

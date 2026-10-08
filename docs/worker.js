@@ -27,7 +27,22 @@ async function fetchImage(url) {
   if (!res.ok) throw new Error(`image http ${res.status}`);
   const blob = await res.blob();
   if (!blob.size) throw new Error("empty image response");
-  return await createImageBitmap(blob, { imageOrientation: "flipY" }).catch(
+  const decoded = await createImageBitmap(blob, { imageOrientation: "flipY" }).catch(
     () => createImageBitmap(blob),
   );
+  // Wikimedia can return very tall/wide photos; a single 1280x4000 bitmap is
+  // ~20 MB, and dozens of them pin hundreds of MB. Bound every bitmap to 1280
+  // on its long side (aspect preserved -> coverDraw still crops correctly).
+  const MAX = 1280;
+  if (decoded.width <= MAX && decoded.height <= MAX) return decoded;
+  const scale = MAX / Math.max(decoded.width, decoded.height);
+  const resized = await createImageBitmap(blob, {
+    resizeWidth: Math.max(1, Math.round(decoded.width * scale)),
+    resizeHeight: Math.max(1, Math.round(decoded.height * scale)),
+    resizeQuality: "high",
+    imageOrientation: "flipY",
+  }).catch(() => null);
+  if (!resized) return decoded;
+  decoded.close();
+  return resized;
 }

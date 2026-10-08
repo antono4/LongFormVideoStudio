@@ -4,7 +4,8 @@
 // utterance and terminates it afterwards. That keeps peak memory flat no matter
 // how many scenes a video has.
 
-import ESpeakNG from "./vendor/espeak-ng.js";
+// Versioned so a tab that cached an older (patched) bundle refetches this one.
+import ESpeakNG from "./vendor/espeak-ng.js?v=3";
 
 const VENDOR = new URL("./vendor/", import.meta.url).href;
 

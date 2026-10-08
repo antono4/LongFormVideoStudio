@@ -31,6 +31,11 @@ seconds. It uses free AI services and fully offline TTS/rendering.
 - `docs/studio.js` keeps history metadata in the `videos` store and blobs in a
   separate `blobs` store (`lfvs` DB v2), capped at `HISTORY_LIMIT`. Blobs are
   read on demand only when a history card is clicked — never bulk-loaded.
+- `docs/worker.js` bounds every decoded bitmap to 1280 px on its long side.
+  Wikimedia can return tall/wide photos whose raw bitmaps are ~20 MB each, and a
+  50-scene video would otherwise pin hundreds of MB.
+- Worker URLs carry a `?v=` cache-buster (`WORKER_VERSION` in `studio.js`); bump
+  it whenever a worker's code changes so open tabs do not reuse stale copies.
 
 ## GitHub Pages
 
