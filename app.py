@@ -61,6 +61,10 @@ def generate():
         voice = config.DEFAULT_VOICE
     language = config.VOICES[voice]["lang"]
 
+    motion = (data.get("motion") or "kenburns").strip().lower()
+    if motion not in ("kenburns", "ai"):
+        motion = "kenburns"
+
     job = manager.create(
         topic=topic,
         target_seconds=target_seconds,
@@ -68,6 +72,7 @@ def generate():
         language=language,
         tone=(data.get("tone") or "engaging and informative").strip(),
         style=(data.get("style") or "cinematic").strip(),
+        motion=motion,
     )
     return jsonify(job.to_dict()), 202
 

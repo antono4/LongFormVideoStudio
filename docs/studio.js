@@ -341,7 +341,169 @@ async function sceneImage(prompt, seed) {
   return { bitmap: null, source: "generated", error: lastError };
 }
 
+// --- AI motion clips (LTX-Video on Hugging Face Spaces) --------------------
+// Free, no API key: we drive the Gradio app directly (upload -> queue join ->
+// SSE stream). Anonymous ZeroGPU quota is limited, so a failure on one scene
+// falls back to the Ken Burns pan and stops trying for the remaining scenes.
+
+const LTX = {
+  base: "https://lightricks-ltx-video-distilled.hf.space",
+  fn: null,            // api_name -> dependency index, loaded from /config
+  exhausted: false,    // set once the space reports a hard failure
+  token: "",           // optional Hugging Face token -> larger ZeroGPU quota
+};
+
+// An HF token is optional: anonymous quota is small, a token raises it a lot.
+function ltxHeaders(extra) {
+  const headers = Object.assign({}, extra);
+  if (LTX.token) headers.Authorization = `Bearer ${LTX.token}`;
+  return headers;
+}
+
+async function ltxFnIndex() {
+  if (LTX.fn) return LTX.fn;
+  const res = await fetchWithTimeout(`${LTX.base}/config`, { headers: ltxHeaders() }, 20000);
+  if (!res.ok) throw new Error(`config http ${res.status}`);
+  const cfg = await res.json();
+  const map = {};
+  (cfg.dependencies || []).forEach((dep, i) => {
+    if (dep.api_name) map[dep.api_name] = i;
+  });
+  if (map.image_to_video === undefined) throw new Error("image_to_video endpoint missing");
+  LTX.fn = map;
+  return map;
+}
+
+async function bitmapToJpeg(bitmap, width, height) {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#05070d";
+  ctx.fillRect(0, 0, width, height);
+  if (bitmap) {
+    const scale = Math.max(width / (bitmap.width || width), height / (bitmap.height || height));
+    const dw = (bitmap.width || width) * scale;
+    const dh = (bitmap.height || height) * scale;
+    ctx.drawImage(bitmap, (width - dw) / 2, (height - dh) / 2, dw, dh);
+  }
+  return await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.9));
+}
+
+async function ltxUpload(blob) {
+  const form = new FormData();
+  form.append("files", blob, "scene.jpg");
+  const res = await fetchWithTimeout(`${LTX.base}/gradio_api/upload`, { method: "POST", headers: ltxHeaders(), body: form }, 45000);
+  if (!res.ok) throw new Error(`upload http ${res.status}`);
+  const paths = await res.json();
+  if (!paths || !paths.length) throw new Error("upload returned no path");
+  return paths[0];
+}
+
+// POST the job, then read the SSE stream until the Space reports completion.
+async function ltxRun(apiName, data, onTick) {
+  const fnIndex = (await ltxFnIndex())[apiName];
+  const session = "s" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+  const join = await fetchWithTimeout(`${LTX.base}/gradio_api/queue/join`, {
+    method: "POST",
+    headers: ltxHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ data, event_data: null, fn_index: fnIndex, session_hash: session, trigger_id: 5 }),
+  }, 30000);
+  if (!join.ok) throw new Error(`join http ${join.status}`);
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 180000);
+  try {
+    const stream = await fetch(`${LTX.base}/gradio_api/queue/data?session_hash=${session}`, { headers: ltxHeaders(), signal: controller.signal });
+    if (!stream.ok || !stream.body) throw new Error(`stream http ${stream.status}`);
+    const reader = stream.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const events = buf.split("\n\n");
+      buf = events.pop();
+      for (const block of events) {
+        const line = block.split("\n").find((l) => l.startsWith("data:"));
+        if (!line) continue;
+        let msg;
+        try { msg = JSON.parse(line.slice(5).trim()); } catch { continue; }
+        if (msg.msg === "estimation" && onTick) onTick(msg.rank_eta);
+        if (msg.msg === "process_completed") {
+          if (!msg.success) {
+            const err = (msg.output && (msg.output.error || msg.output)) || "space error";
+            throw new Error(String(err));
+          }
+          return msg.output && msg.output.data;
+        }
+      }
+    }
+    throw new Error("stream ended without a result");
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
+}
+
+function ltxVideoUrl(fileData) {
+  if (!fileData) return "";
+  if (fileData.url) return fileData.url;
+  if (fileData.path) return `${LTX.base}/gradio_api/file=${fileData.path}`;
+  return "";
+}
+
+async function loadClipVideo(url) {
+  const el = document.createElement("video");
+  el.crossOrigin = "anonymous";
+  el.muted = true;
+  el.playsInline = true;
+  el.loop = true;
+  el.preload = "auto";
+  const token = LTX.token ? `?token=${encodeURIComponent(LTX.token)}` : "";
+  el.src = url + token;
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("clip load timeout")), 45000);
+    el.onloadeddata = () => { clearTimeout(timer); resolve(); };
+    el.onerror = () => { clearTimeout(timer); reject(new Error("clip load error")); };
+  });
+  return el;
+}
+
+// Returns a playing <video> element for the scene, or throws so the caller can
+// fall back to the still image.
+async function generateAiClip(bitmap, prompt, durationSec, seed) {
+  const NEG = "worst quality, inconsistent motion, blurry, jittery, distorted, watermark, text";
+  const jpeg = await bitmapToJpeg(bitmap, 704, 512);
+  const path = await ltxUpload(jpeg);
+  const data = [
+    prompt, NEG,
+    { path, meta: { _type: "gradio.FileData" } }, null,
+    512, 704, "image-to-video",
+    Math.max(0.3, Math.min(8.5, durationSec)),
+    9, seed, false, 1, true,
+  ];
+  const out = await ltxRun("image_to_video", data);
+  const url = ltxVideoUrl(out && out[0]);
+  if (!url) throw new Error("no clip url");
+  return await loadClipVideo(url);
+}
+
 // --- Canvas helpers --------------------------------------------------------
+
+function coverDrawVideo(ctx, video, t, duration, index) {
+  const W = ctx.canvas.width;
+  const H = ctx.canvas.height;
+  const progress = duration > 0 ? Math.min(1, t / duration) : 0;
+  const zoom = 1.02 + 0.06 * progress;
+  const vw = video.videoWidth || W;
+  const vh = video.videoHeight || H;
+  const scale = Math.max(W / vw, H / vh) * zoom;
+  const dw = vw * scale;
+  const dh = vh * scale;
+  ctx.drawImage(video, (W - dw) / 2, (H - dh) / 2, dw, dh);
+}
 
 function coverDraw(ctx, image, t, duration, index) {
   const W = ctx.canvas.width;
@@ -424,7 +586,8 @@ function drawFrame(ctx, segment, allSegments, t, duration, index) {
   const H = ctx.canvas.height;
   ctx.fillStyle = "#05070d";
   ctx.fillRect(0, 0, W, H);
-  if (segment.bitmap) coverDraw(ctx, segment.bitmap, t, duration, index);
+  if (segment.clipVideo) coverDrawVideo(ctx, segment.clipVideo, t, duration, index);
+  else if (segment.bitmap) coverDraw(ctx, segment.bitmap, t, duration, index);
   else drawFallback(ctx, index);
 
   const grad = ctx.createLinearGradient(0, H * 0.55, 0, H);
@@ -532,6 +695,7 @@ async function renderVideo(segments, ctxAudio, mime, onProgress, audioCtx) {
   const frameMs = 1000 / fps;
   let ticks = 0;
   let lastLog = -1;
+  let lastActiveClip = null;
   await new Promise((resolve) => {
     let done = false;
     const finish = () => { if (!done) { done = true; resolve(); } };
@@ -548,6 +712,16 @@ async function renderVideo(segments, ctxAudio, mime, onProgress, audioCtx) {
         for (const segment of segments) {
           if (elapsed <= acc + segment.duration) { active = segment; local = elapsed - acc; break; }
           acc += segment.duration;
+        }
+        // Keep only the active scene's AI clip playing so the picture advances.
+        if (active !== lastActiveClip) {
+          if (lastActiveClip && lastActiveClip.clipVideo) {
+            try { lastActiveClip.clipVideo.pause(); } catch (e) { /* ignore */ }
+          }
+          if (active.clipVideo) {
+            try { active.clipVideo.currentTime = 0; active.clipVideo.play().catch(() => {}); } catch (e) { /* ignore */ }
+          }
+          lastActiveClip = active;
         }
         drawFrame(ctx, active, segments, local, active.duration, active.index);
         ticks++;
@@ -595,7 +769,7 @@ function setStage(stage, progress) {
 function show(el) { el.classList.remove("hidden"); }
 function hide(el) { el.classList.add("hidden"); }
 
-async function buildVideo(topic, targetSeconds, voiceKey, tone, style, language) {
+async function buildVideo(topic, targetSeconds, voiceKey, tone, style, language, motion) {
   const spec = VOICES[voiceKey] || VOICES.en_female;
 
   debugLog(`buildVideo start topic="${topic}" target=${targetSeconds}s voice=${voiceKey}`);
@@ -639,6 +813,24 @@ async function buildVideo(topic, targetSeconds, voiceKey, tone, style, language)
     debugLog(`image ${i + 1}/${segments.length}: ${source}${bitmap ? "" : " (no bitmap)"}`);
   }
 
+  // Optionally replace each still with a short AI-generated motion clip.
+  const clipCount = motion === "ai" ? script.scenes.length : 0;
+  for (let i = 0; i < clipCount; i++) {
+    setStage(`Generating AI motion clip ${i + 1}/${clipCount}…`, 76);
+    const scene = script.scenes[i];
+    const members = segments.filter((s) => s.sceneIndex === i);
+    const duration = members.reduce((sum, s) => sum + s.duration, 0);
+    try {
+      const clipVideo = await generateAiClip(members[0].bitmap, scene.visual, duration + 1, 1000 + i);
+      for (const member of members) member.clipVideo = clipVideo;
+      debugLog(`clip ${i + 1}/${clipCount}: ltx-video ${duration.toFixed(1)}s`);
+    } catch (err) {
+      LTX.exhausted = true;
+      debugLog(`clip ${i + 1}/${clipCount} failed: ${err.message} (using still image)`);
+      break;
+    }
+  }
+
   const mime = pickMime();
   if (!mime) throw new Error("This browser cannot record video (MediaRecorder unsupported).");
   setStage("Rendering video in your browser…", 78);
@@ -648,12 +840,14 @@ async function buildVideo(topic, targetSeconds, voiceKey, tone, style, language)
     state.audioCtx,
   );
 
+  const clipScenes = new Set(segments.filter((s) => s.clipVideo).map((s) => s.sceneIndex)).size;
   return {
     blob,
     mime,
     script,
     segments,
     duration: cursor,
+    motion: clipScenes ? `AI clips: ${clipScenes}/${script.scenes.length}` : "Ken Burns",
   };
 }
 
@@ -723,7 +917,7 @@ function showVideo(result, topic, fromHistory) {
     : "script: built-in (AI text service was unavailable)";
   $("video-meta").textContent =
     `${result.duration.toFixed(1)}s  •  ${result.segments.length} scenes  •  ` +
-    `${(result.blob.size / 1048576).toFixed(1)} MB  •  ${note}`;
+    `${(result.blob.size / 1048576).toFixed(1)} MB  •  ${result.motion || "Ken Burns"}  •  ${note}`;
   $("download-btn").href = state.lastUrl;
   $("download-btn").download = `${(result.script.title || topic).replace(/[^\w\- ]+/g, "").slice(0, 60) || "video"}.${ext}`;
   show($("video-box"));
@@ -798,10 +992,12 @@ async function onSubmit(event) {
     if (!state.audioCtx) state.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     // resume() can hang under strict autoplay policies; never block the build.
     await Promise.race([state.audioCtx.resume().catch(() => {}), new Promise((r) => setTimeout(r, 2500))]);
+    const motionEl = $("motion");
     const result = await buildVideo(
       topic, targetSeconds, voiceKey,
       $("tone").value.trim() || "engaging and informative",
       $("style").value, VOICES[voiceKey].lang,
+      motionEl ? motionEl.value : "kenburns",
     );
     showVideo(result, topic);
   } catch (err) {
@@ -825,6 +1021,24 @@ function init() {
     select.appendChild(option);
   }
   select.value = "en_female";
+
+  const motionSelect = $("motion");
+  const tokenField = $("hf-token-field");
+  const tokenInput = $("hf-token");
+  if (tokenInput) {
+    try { tokenInput.value = localStorage.getItem("hfToken") || ""; } catch (e) { /* ignore */ }
+  }
+  const syncToken = () => {
+    if (tokenField) tokenField.style.display = motionSelect && motionSelect.value === "ai" ? "" : "none";
+    LTX.token = tokenInput ? tokenInput.value.trim() : "";
+    try {
+      if (LTX.token) localStorage.setItem("hfToken", LTX.token);
+      else localStorage.removeItem("hfToken");
+    } catch (e) { /* ignore */ }
+  };
+  if (motionSelect) motionSelect.addEventListener("change", syncToken);
+  if (tokenInput) tokenInput.addEventListener("change", syncToken);
+  syncToken();
 
   $("gen-form").addEventListener("submit", onSubmit);
   $("again-btn").addEventListener("click", () => {
@@ -859,6 +1073,14 @@ function applyUrlParams() {
   if (params.get("voice") && VOICES[params.get("voice")]) $("voice").value = params.get("voice");
   if (params.get("style")) $("style").value = params.get("style");
   if (params.get("tone")) $("tone").value = params.get("tone");
+  if (params.get("motion") && $("motion")) {
+    $("motion").value = params.get("motion");
+    $("motion").dispatchEvent(new Event("change"));
+  }
+  if (params.get("hftoken") && $("hf-token")) {
+    $("hf-token").value = params.get("hftoken");
+    $("hf-token").dispatchEvent(new Event("change"));
+  }
   if (params.get("autorun") === "1") {
     setTimeout(() => $("gen-form").requestSubmit(), 300);
   }

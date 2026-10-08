@@ -54,6 +54,14 @@ def _subtitle_filter(textfile: Path) -> str:
     )
 
 
+def _encode_args() -> list:
+    return [
+        "-r", str(config.FPS),
+        "-c:v", "libx264", "-preset", config.PRESET, "-crf", str(config.CRF),
+        "-pix_fmt", "yuv420p", "-an",
+    ]
+
+
 def _render_segment(image: Path, textfile: Path, duration: float, frames: int,
                     zoom_in: bool, out_path: Path) -> None:
     vf = f"{_zoompan_filter(frames, zoom_in)},{_subtitle_filter(textfile)}"
@@ -62,9 +70,25 @@ def _render_segment(image: Path, textfile: Path, duration: float, frames: int,
         "-loop", "1", "-framerate", str(config.FPS), "-i", str(image),
         "-vf", vf,
         "-t", f"{duration:.3f}",
-        "-r", str(config.FPS),
-        "-c:v", "libx264", "-preset", config.PRESET, "-crf", str(config.CRF),
-        "-pix_fmt", "yuv420p", "-an",
+        *_encode_args(),
+        str(out_path),
+    ])
+
+
+def _render_clip_segment(clip: Path, textfile: Path, duration: float,
+                         out_path: Path) -> None:
+    """Use an AI-generated motion clip, looped/trimmed to the scene duration."""
+    vf = (
+        f"scale={config.WIDTH}:{config.HEIGHT}:force_original_aspect_ratio=increase,"
+        f"crop={config.WIDTH}:{config.HEIGHT},setsar=1,"
+        f"{_subtitle_filter(textfile)}"
+    )
+    _run([
+        "ffmpeg", "-y",
+        "-stream_loop", "-1", "-i", str(clip),
+        "-t", f"{duration:.3f}",
+        "-vf", vf,
+        *_encode_args(),
         str(out_path),
     ])
 
@@ -108,8 +132,12 @@ def render(scenes: list, work_dir: Path, out_path: Path, progress=None) -> dict:
         textfile = work_dir / f"sub_{i}.txt"
         _write_subtitle(scene["text"], textfile)
         seg = work_dir / f"seg_{i}.mp4"
-        _render_segment(Path(scene["image"]), textfile, duration, frames,
-                        zoom_in=(i % 2 == 0), out_path=seg)
+        clip = scene.get("clip")
+        if clip and Path(clip).exists():
+            _render_clip_segment(Path(clip), textfile, duration, seg)
+        else:
+            _render_segment(Path(scene["image"]), textfile, duration, frames,
+                            zoom_in=(i % 2 == 0), out_path=seg)
         durations.append(duration)
         segments.append(seg)
         scene_audio.append(Path(scene["audio"]))

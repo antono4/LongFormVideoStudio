@@ -80,6 +80,7 @@ form.addEventListener("submit", async (e) => {
     voice: $("voice").value,
     style: $("style").value,
     tone: $("tone").value.trim(),
+    motion: $("motion").value,
   };
   if (!payload.topic) return;
 

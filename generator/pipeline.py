@@ -7,7 +7,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import config, renderer, scriptwriter, tts, visuals
+from . import aivideo, config, renderer, scriptwriter, tts, visuals
 
 
 @dataclass
@@ -19,6 +19,7 @@ class Job:
     language: str
     tone: str
     style: str
+    motion: str = "kenburns"  # kenburns | ai
     status: str = "queued"  # queued | running | done | error
     stage: str = "Queued"
     progress: int = 0
@@ -35,6 +36,7 @@ class Job:
             "target_seconds": self.target_seconds,
             "voice": self.voice,
             "language": self.language,
+            "motion": self.motion,
             "status": self.status,
             "stage": self.stage,
             "progress": self.progress,
@@ -101,6 +103,13 @@ class JobManager:
                 scene["image"] = str(info["path"])
                 scene["image_source"] = info["source"]
                 self._set(job, f"Image {i + 1}/{total}", 40 + int(35 * (i + 1) / total))
+
+            if job.motion == "ai":
+                self._set(job, "Generating AI motion clips...", 76)
+                aivideo.generate_motion_clips(
+                    scenes, work_dir,
+                    on_progress=lambda msg: self._set(job, msg, 76),
+                )
 
             self._set(job, "Rendering video with ffmpeg...", 78)
 

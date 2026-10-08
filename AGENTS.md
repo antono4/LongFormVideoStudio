@@ -35,10 +35,31 @@ seconds. It uses free AI services and fully offline TTS/rendering.
   build publishes the whole tree. Large files make the build slow; give it a
   couple of minutes after a push.
 
+## AI motion clips (LTX-Video)
+
+- `motion=ai` animates each scene with `Lightricks/ltx-video-distilled` on HF
+  Spaces instead of a Ken Burns pan. `kenburns` (default) stays the fast path.
+- The Space is Gradio, not REST: `POST /gradio_api/upload` (multipart, field
+  `files`) -> `POST /gradio_api/queue/join` with `{data, fn_index, session_hash}`
+  -> read `GET /gradio_api/queue/data?session_hash=...` (SSE) until
+  `msg: "process_completed"`. The `call/<name>` shortcut returns
+  `event: error data: null`; use the queue API.
+- `fn_index` comes from `GET /config` (`dependencies[].api_name`); it can shift
+  when the Space is rebuilt, so resolve it at runtime rather than hardcoding.
+- Result files are only reachable through `/gradio_api/file=<path>` (raw
+  `/tmp/gradio/...` returns 403). That URL sends CORS headers, so the browser can
+  draw the clip into a canvas without tainting it.
+- Anonymous ZeroGPU quota is tiny and per-IP; a Hugging Face token raises it a
+  lot. The client exposes an optional token field (`?hftoken=` also works) and
+  the server reads `HF_TOKEN`/`HUGGINGFACE_TOKEN`.
+- Never let AI-video failure break generation: a failed clip falls back to the
+  still image, and the client stops trying after the first failure.
+
 ## Conventions
 
 - Scripts return dicts with `text` + `visual` keys per scene; the pipeline adds
-  `audio`, `audio_duration`, `image`, `image_source`.
+  `audio`, `audio_duration`, `image`, `image_source`, and optionally
+  `clip` + `clip_source`.
 - `visuals.fetch_image` must always return `{'path', 'source'}` and never raise.
 - Keep the app runnable without API keys; treat paid endpoints as optional.
 
