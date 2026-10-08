@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Long-Form Video Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="aurora"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">◈</span>
+      <div>
+        <h1>Long-Form Video Studio</h1>
+        <p>Turn a topic into a narrated, subtitled video longer than 30 seconds — right in your browser.</p>
+      </div>
+    </div>
+    <div class="status-chip ok" id="engine-badge">
+      <span class="dot"></span> runs fully client-side
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="panel form-panel">
+      <form id="gen-form">
+        <label class="field">
+          <span>Video topic</span>
+          <textarea id="topic" rows="2" placeholder="e.g. The hidden life of deep-sea creatures" required></textarea>
+        </label>
+
+        <label class="field">
+          <span>Duration <b id="dur-value">60</b> seconds</span>
+          <input type="range" id="duration" min="30" max="600" step="5" value="60" />
+          <div class="range-scale"><span>30s</span><span>600s</span></div>
+        </label>
+
+        <div class="grid-2">
+          <label class="field">
+            <span>Voice</span>
+            <select id="voice"></select>
+          </label>
+          <label class="field">
+            <span>Visual style</span>
+            <select id="style">
+              <option value="cinematic">Cinematic</option>
+              <option value="photorealistic">Photorealistic</option>
+              <option value="anime">Anime</option>
+              <option value="3d render">3D render</option>
+              <option value="watercolor">Watercolor</option>
+              <option value="documentary">Documentary</option>
+            </select>
+          </label>
+        </div>
+
+        <label class="field">
+          <span>Tone</span>
+          <input type="text" id="tone" value="engaging and informative" />
+        </label>
+
+        <button type="submit" id="submit-btn" class="primary">
+          <span class="btn-label">Generate video</span>
+        </button>
+        <p class="hint">Script and images come from free AI services; narration runs on-device with eSpeak-NG (WASM). No API key needed.</p>
+      </form>
+    </section>
+
+    <section class="panel result-panel">
+      <div id="placeholder" class="placeholder">
+        <div class="placeholder-art">▶</div>
+        <p>Your generated video will appear here.</p>
+      </div>
+
+      <div id="progress-box" class="progress-box hidden">
+        <div class="spinner"></div>
+        <h3 id="stage">Starting...</h3>
+        <div class="bar"><div id="bar-fill"></div></div>
+        <p id="pct">0%</p>
+      </div>
+
+      <div id="error-box" class="error-box hidden">
+        <h3>Something went wrong</h3>
+        <p id="error-text"></p>
+      </div>
+
+      <div id="video-box" class="video-box hidden">
+        <h3 id="video-title"></h3>
+        <video id="video" controls playsinline></video>
+        <div class="video-meta" id="video-meta"></div>
+        <div class="actions">
+          <a id="download-btn" class="primary" download>Download video</a>
+          <button id="again-btn" class="ghost" type="button">New video</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <section class="history">
+    <h2>Recent videos</h2>
+    <div id="history-list" class="history-list"></div>
+  </section>
+
+  <footer class="footer">
+    <p>100% static — hosted on GitHub Pages. Script + images from free AI APIs, speech from eSpeak-NG WASM, video rendered with canvas and MediaRecorder.</p>
+  </footer>
+
+  <script type="module" src="studio.js"></script>
+</body>
+</html>
